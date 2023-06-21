@@ -1,0 +1,46 @@
+{-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+
+module Homework1 where
+
+import           Plutus.V2.Ledger.Api (BuiltinData, MintingPolicy, POSIXTime,
+                                       PubKeyHash, ScriptContext,
+                                       mkMintingPolicyScript, TxInfo (txInfoValidRange), POSIXTimeRange, scriptContextTxInfo)
+import qualified PlutusTx
+import           PlutusTx.Prelude     (Bool, ($), traceIfFalse, (&&))
+import           Utilities            (wrapPolicy)
+import Plutus.V2.Ledger.Contexts (txSignedBy)
+import Plutus.V1.Ledger.Interval
+
+{-# INLINABLE mkDeadlinePolicy #-}
+-- This policy should only allow minting (or burning) of tokens if the owner of the specified PubKeyHash
+-- has signed the transaction and if the specified deadline has not passed.
+mkDeadlinePolicy :: PubKeyHash -> POSIXTime -> () -> ScriptContext -> Bool
+mkDeadlinePolicy _pkh _deadline () _ctx = 
+    traceIfFalse "not signed by owner" checkSig &&
+    traceIfFalse "too late: deadline has already passed" checkDeadline
+  where
+    txInfo :: TxInfo
+    txInfo = scriptContextTxInfo _ctx
+
+    checkSig :: Bool
+    checkSig = txSignedBy txInfo _pkh
+
+    txValidRange :: POSIXTimeRange
+    txValidRange  = txInfoValidRange txInfo
+
+    checkDeadline :: Bool
+    checkDeadline = contains (to _deadline) txValidRange
+
+{-# INLINABLE mkWrappedDeadlinePolicy #-}
+mkWrappedDeadlinePolicy :: PubKeyHash -> POSIXTime -> BuiltinData -> BuiltinData -> ()
+mkWrappedDeadlinePolicy pkh deadline = wrapPolicy $ mkDeadlinePolicy pkh deadline
+
+deadlinePolicy :: PubKeyHash -> POSIXTime -> MintingPolicy
+deadlinePolicy pkh deadline = mkMintingPolicyScript $
+    $$(PlutusTx.compile [|| mkWrappedDeadlinePolicy ||])
+        `PlutusTx.applyCode` PlutusTx.liftCode pkh
+        `PlutusTx.applyCode` PlutusTx.liftCode deadline
